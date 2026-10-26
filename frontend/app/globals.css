@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/**
+ * Tailwind CSS v4 design tokens.
+ * Anything declared here becomes a utility, e.g. `bg-brand-600` or `text-brand-700`.
+ */
+@theme {
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-900: #1e3a8a;
+}
+
+html,
+body {
+  height: 100%;
+}

@@ -1,0 +1,35 @@
+{
+  "name": "product-provenance-warranty-dapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "COMP5565 group project - Decentralized Product Provenance and Warranty dApp (Hardhat + Next.js)",
+  "license": "MIT",
+  "workspaces": [
+    "contracts",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "compile": "npm run compile --workspace contracts",
+    "test": "npm run test --workspace contracts",
+    "coverage": "npm run coverage --workspace contracts",
+    "clean": "npm run clean --workspace contracts",
+    "typecheck": "npm run typecheck --workspace contracts",
+    "chain": "npm run node --workspace contracts",
+    "deploy:local": "npm run deploy:local --workspace contracts",
+    "deploy:sepolia": "npm run deploy:sepolia --workspace contracts",
+    "seed:local": "npm run seed:local --workspace contracts",
+    "export:abi": "npm run export:abi --workspace contracts",
+    "dev": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend",
+    "format": "prettier --write \"contracts/{contracts,lib,test,scripts,ignition}/**/*.{sol,ts}\" \"frontend/{app,components,lib}/**/*.{ts,tsx,css}\"",
+    "format:check": "prettier --check \"contracts/{contracts,lib,test,scripts,ignition}/**/*.{sol,ts}\" \"frontend/{app,components,lib}/**/*.{ts,tsx,css}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "prettier-plugin-solidity": "^2.0.0"
+  }
+}

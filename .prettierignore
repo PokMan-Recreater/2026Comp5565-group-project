@@ -1,0 +1,20 @@
+node_modules
+package-lock.json
+
+# Build output
+.next
+out
+dist
+artifacts
+cache
+coverage
+types
+
+# Generated / machine owned
+frontend/lib/abi
+frontend/lib/deployed-contracts.json
+ignition/deployments
+
+# Solidity sources are formatted with prettier-plugin-solidity, but generated
+# dependencies pulled in from node_modules are not.
+contracts/artifacts

@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+
+# ---------------------------------------------------------------
+# Hardhat / Solidity
+# ---------------------------------------------------------------
+# Compiler cache + build artifacts (regenerate with `npm run compile`)
+cache/
+artifacts/
+types/
+# Hardhat Ignition deployment journals are environment specific
+ignition/deployments/
+
+# ---------------------------------------------------------------
+# Next.js
+# ---------------------------------------------------------------
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# ---------------------------------------------------------------
+# Environment / secrets  (NEVER commit these)
+# ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------
+# Logs / coverage / misc
+# ---------------------------------------------------------------
+coverage/
+coverage.json
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
