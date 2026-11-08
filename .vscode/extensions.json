@@ -3,6 +3,7 @@
     "NomicFoundation.hardhat-solidity",
     "bradlc.vscode-tailwindcss",
     "dbaeumer.vscode-eslint",
-    "esbenp.prettier-vscode"
+    "esbenp.prettier-vscode",
+    "saoudrizwan.claude-dev"
   ]
 }
