@@ -22,7 +22,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  * - `MANUFACTURER_ROLE`   : `registerProduct`, `transferToRetailer`, `voidWarranty`, `recallProduct`.
  * - `RETAILER_ROLE`       : `transferToCustomer` (retail sale).
  * - `CUSTOMER_ROLE`       : `transferOwnership` (secondary resale), `submitWarrantyClaim`.
- * - `SERVICE_CENTER_ROLE` : `resolveWarrantyClaim`.
+ * - `SERVICE_CENTER_ROLE` : `resolveWarrantyClaim`, `logServiceAction`.
  *
  * Design notes
  * ------------
@@ -170,6 +170,26 @@ contract ProductWarrantyRegistry is AccessControl {
     string resolution; // filled in by the service centre on resolution
   }
 
+  /**
+   * @notice One servicing action logged against a unit by a service centre.
+   * @dev This is the "log servicing actions" half of the service-centre role: it records
+   *      what was done (repair, part replacement, diagnostic...) without touching the
+   *      warranty state. Servicing is allowed even on a recalled or expired unit, because
+   *      the log is evidence, not a claim.
+   * @param recordId     Index within the product's service log.
+   * @param serviceCenter Account that logged the action.
+   * @param loggedAt     Block timestamp of the log entry.
+   * @param action       Human readable description of the work performed.
+   * @param evidenceHash keccak256 of the job sheet / photos (or bytes32(0)).
+   */
+  struct ServiceRecord {
+    uint256 recordId;
+    address serviceCenter;
+    uint64 loggedAt;
+    string action;
+    bytes32 evidenceHash;
+  }
+
   // ---------------------------------------------------------------------
   // Errors
   // ---------------------------------------------------------------------
@@ -181,6 +201,7 @@ contract ProductWarrantyRegistry is AccessControl {
   error InvalidWarrantyDuration();
   error EmptyReason();
   error EmptyDescription();
+  error EmptyServiceAction();
   error ProductNotFound(uint256 productId);
   error NotProductOwner(uint256 productId, address caller);
   error NotProductManufacturer(uint256 productId, address caller);
@@ -228,6 +249,13 @@ contract ProductWarrantyRegistry is AccessControl {
     ClaimStatus status,
     string resolution
   );
+  event ServiceActionLogged(
+    uint256 indexed productId,
+    uint256 indexed recordId,
+    address indexed serviceCenter,
+    string action,
+    bytes32 evidenceHash
+  );
 
   // ---------------------------------------------------------------------
   // Storage
@@ -248,6 +276,9 @@ contract ProductWarrantyRegistry is AccessControl {
 
   /// @notice productId => warranty claims filed against the unit.
   mapping(uint256 productId => WarrantyClaim[] claims) private _warrantyClaims;
+
+  /// @notice productId => servicing actions logged by service centres.
+  mapping(uint256 productId => ServiceRecord[] log) private _serviceLog;
 
   // ---------------------------------------------------------------------
   // Modifiers
@@ -539,6 +570,38 @@ contract ProductWarrantyRegistry is AccessControl {
   }
 
   /**
+   * @notice Record a servicing action performed on a unit ("log servicing actions").
+   * @dev Restricted to `SERVICE_CENTER_ROLE`. Deliberately independent of the warranty
+   *      state: a service centre can record work on an expired, voided or recalled unit,
+   *      because the log is evidence rather than a claim. Charges nothing and does not
+   *      consume a claim slot.
+   * @param productId    Unit that was serviced.
+   * @param action       Human readable description of the work (e.g. "battery replaced").
+   * @param evidenceHash keccak256 of the job sheet / photos (or bytes32(0)).
+   * @return recordId    Index of the new entry inside the product's service log.
+   */
+  function logServiceAction(
+    uint256 productId,
+    string calldata action,
+    bytes32 evidenceHash
+  ) external productExists(productId) onlyServiceCenter returns (uint256 recordId) {
+    if (bytes(action).length == 0) revert EmptyServiceAction();
+
+    recordId = _serviceLog[productId].length;
+    _serviceLog[productId].push(
+      ServiceRecord({
+        recordId: recordId,
+        serviceCenter: msg.sender,
+        loggedAt: uint64(block.timestamp),
+        action: action,
+        evidenceHash: evidenceHash
+      })
+    );
+
+    emit ServiceActionLogged(productId, recordId, msg.sender, action, evidenceHash);
+  }
+
+  /**
    * @notice Void the warranty of a unit (abuse, missing serial, goodwill decision).
    * @dev Only the manufacturer that registered the unit can void it.
    */
@@ -660,6 +723,16 @@ contract ProductWarrantyRegistry is AccessControl {
   ) external view productExists(productId) returns (WarrantyClaim memory) {
     if (claimId >= _warrantyClaims[productId].length) revert UnknownClaim(productId, claimId);
     return _warrantyClaims[productId][claimId];
+  }
+
+  /// @notice Every servicing action logged against a unit, oldest first.
+  function getServiceLog(uint256 productId) external view productExists(productId) returns (ServiceRecord[] memory) {
+    return _serviceLog[productId];
+  }
+
+  /// @notice Number of servicing actions logged against a unit.
+  function serviceLogLength(uint256 productId) external view productExists(productId) returns (uint256) {
+    return _serviceLog[productId].length;
   }
 
   /// @notice Look a product up by the serial number printed on the unit (0 = unknown).

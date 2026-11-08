@@ -783,4 +783,105 @@ describe("ProductWarrantyRegistry", function () {
       expect(claims.map((claim: any) => claim.status)).to.deep.equal([ClaimStatus.Pending, ClaimStatus.Pending]);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Servicing log  (the "log servicing actions" half of the service-centre role)
+  // -------------------------------------------------------------------------
+
+  describe("Servicing log", function () {
+    it("lets a service centre log an action and emits ServiceActionLogged", async function () {
+      const { registry, manufacturer, retailer, customer, serviceCenter } =
+        await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-6000-0001");
+      await sellToCustomer(registry, productId, { manufacturer, retailer, customer });
+
+      await expect(registry.connect(serviceCenter).logServiceAction(productId, "battery replaced", ZERO_HASH))
+        .to.emit(registry, "ServiceActionLogged")
+        .withArgs(productId, 0n, serviceCenter.address, "battery replaced", ZERO_HASH);
+
+      const log = await registry.getServiceLog(productId);
+      expect(log).to.have.lengthOf(1);
+      expect(log[0].recordId).to.equal(0n);
+      expect(log[0].serviceCenter).to.equal(serviceCenter.address);
+      expect(log[0].action).to.equal("battery replaced");
+      expect(log[0].evidenceHash).to.equal(ZERO_HASH);
+      expect(await registry.serviceLogLength(productId)).to.equal(1n);
+    });
+
+    it("appends servicing actions in order and leaves the warranty untouched", async function () {
+      const { registry, manufacturer, retailer, customer, serviceCenter } =
+        await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-6000-0002");
+      await sellToCustomer(registry, productId, { manufacturer, retailer, customer });
+
+      const before = await registry.getWarranty(productId);
+
+      await registry.connect(serviceCenter).logServiceAction(productId, "diagnostic", ZERO_HASH);
+      await registry.connect(serviceCenter).logServiceAction(productId, "strap replaced", ZERO_HASH);
+
+      const log = await registry.getServiceLog(productId);
+      expect(log.map((record: any) => record.action)).to.deep.equal(["diagnostic", "strap replaced"]);
+      expect(log.map((record: any) => record.recordId)).to.deep.equal([0n, 1n]);
+      expect(await registry.serviceLogLength(productId)).to.equal(2n);
+
+      // Logging is evidence, not a claim: counters and status are unchanged.
+      const after = await registry.getWarranty(productId);
+      expect(after.claimCount).to.equal(before.claimCount);
+      expect(after.status).to.equal(WarrantyStatus.Active);
+      expect(await registry.getWarrantyClaims(productId)).to.have.lengthOf(0);
+    });
+
+    it("rejects empty actions and unknown products", async function () {
+      const { registry, manufacturer, serviceCenter } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-6000-0003");
+
+      await expect(
+        registry.connect(serviceCenter).logServiceAction(productId, "", ZERO_HASH),
+      ).to.be.revertedWithCustomError(registry, "EmptyServiceAction");
+
+      await expect(registry.connect(serviceCenter).logServiceAction(999n, "diagnostic", ZERO_HASH))
+        .to.be.revertedWithCustomError(registry, "ProductNotFound")
+        .withArgs(999n);
+
+      await expect(registry.getServiceLog(999n))
+        .to.be.revertedWithCustomError(registry, "ProductNotFound")
+        .withArgs(999n);
+    });
+
+    it("only lets a service centre log servicing actions", async function () {
+      const { registry, manufacturer, retailer, customer, serviceCenter } =
+        await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-6000-0004");
+      await sellToCustomer(registry, productId, { manufacturer, retailer, customer });
+
+      await expect(registry.connect(customer).logServiceAction(productId, "self repair", ZERO_HASH))
+        .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
+        .withArgs(customer.address, await registry.SERVICE_CENTER_ROLE());
+
+      await expect(registry.connect(manufacturer).logServiceAction(productId, "factory service", ZERO_HASH))
+        .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
+        .withArgs(manufacturer.address, await registry.SERVICE_CENTER_ROLE());
+
+      await registry.connect(serviceCenter).logServiceAction(productId, "authorized repair", ZERO_HASH);
+      expect(await registry.serviceLogLength(productId)).to.equal(1n);
+    });
+
+    it("still logs servicing on a recalled unit, because the log is evidence", async function () {
+      const { registry, manufacturer, retailer, customer, serviceCenter } =
+        await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-6000-0005");
+      await sellToCustomer(registry, productId, { manufacturer, retailer, customer });
+
+      await registry.connect(manufacturer).recallProduct(productId, "fire hazard");
+
+      await expect(registry.connect(serviceCenter).logServiceAction(productId, "quarantined and refunded", ZERO_HASH))
+        .to.emit(registry, "ServiceActionLogged")
+        .withArgs(productId, 0n, serviceCenter.address, "quarantined and refunded", ZERO_HASH);
+    });
+  });
 });

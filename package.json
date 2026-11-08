@@ -21,6 +21,7 @@
     "deploy:local": "npm run deploy:local --workspace contracts",
     "deploy:sepolia": "npm run deploy:sepolia --workspace contracts",
     "seed:local": "npm run seed:local --workspace contracts",
+    "grant:roles": "npm run grant:roles --workspace contracts",
     "export:abi": "npm run export:abi --workspace contracts",
     "dev": "npm run dev --workspace frontend",
     "build": "npm run build --workspace frontend",
