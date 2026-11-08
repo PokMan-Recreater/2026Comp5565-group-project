@@ -1,38 +1,34 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useConnection, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useConnection, useReadContract } from "wagmi";
 
 import {
   CLAIM_STATUS,
   PARTY_ROLE,
   PRODUCT_STATUS,
   TRANSFER_REASON,
-  getProductProvenanceAddress,
+  ZERO_HASH,
   label,
-  productProvenanceAbi,
+  productWarrantyRegistryAbi as registryAbi,
 } from "@/lib/contracts";
 import { formatDuration, formatTimestamp, shortAddress } from "@/lib/format";
+import { useProductDetail, useRegistryAddress, useRegistryWrite, useRoles } from "@/lib/use-registry";
 
-const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
-
-const INPUT_CLASS =
-  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
+import { BUTTON_CLASS, Field, INPUT_CLASS, Row, StatusChip, TxFeedback, WarrantyChip } from "./ui";
 
 /**
- * Serial-number search box. It first resolves the serial number to a
- * `productId`, then hands that id to {@link ProductDetails} for the heavy reads.
+ * Serial-number search box. It first resolves the serial number to a `productId`,
+ * then hands that id to {@link ProductDetails} for the heavier reads.
  */
 export function ProductLookup() {
-  const connection = useConnection();
+  const registry = useRegistryAddress();
   const [serialInput, setSerialInput] = useState("");
   const [serial, setSerial] = useState("");
 
-  const address = getProductProvenanceAddress(connection.chainId);
-
   const idQuery = useReadContract({
-    address,
-    abi: productProvenanceAbi,
+    address: registry,
+    abi: registryAbi,
     functionName: "getProductIdBySerial",
     args: [serial],
     query: { enabled: serial.length > 0 },
@@ -52,13 +48,11 @@ export function ProductLookup() {
         <input
           value={serialInput}
           onChange={(event) => setSerialInput(event.target.value)}
-          placeholder="Enter a serial number, e.g. SW-1000-0001"
+          placeholder="Enter a serial number, e.g. AX1-42-0001"
+          aria-label="Serial number"
           className={INPUT_CLASS}
         />
-        <button
-          type="submit"
-          className="shrink-0 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700"
-        >
+        <button type="submit" className={`shrink-0 ${BUTTON_CLASS}`}>
           Look up
         </button>
       </form>
@@ -67,7 +61,8 @@ export function ProductLookup() {
       {idQuery.error !== null && <p className="text-sm text-rose-600">{idQuery.error.message}</p>}
       {notFound && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          No product is registered with the serial number &quot;{serial}&quot;.
+          No product is registered with the serial number &quot;{serial}&quot;. It is either not registered yet or not
+          authentic.
         </p>
       )}
 
@@ -76,48 +71,20 @@ export function ProductLookup() {
   );
 }
 
-/** Reads the product record, its chain of custody and its warranty claims. */
+/** Reads the product record, its chain of custody, warranty claims and service log. */
 function ProductDetails({ productId }: { productId: bigint }) {
-  const connection = useConnection();
-  const address = getProductProvenanceAddress(connection.chainId);
+  const { product, history, claims, serviceLog, warrantyStatus, remainingClaims, isLoading } =
+    useProductDetail(productId);
 
-  const productQuery = useReadContract({
-    address,
-    abi: productProvenanceAbi,
-    functionName: "getProduct",
-    args: [productId],
-  });
-  const historyQuery = useReadContract({
-    address,
-    abi: productProvenanceAbi,
-    functionName: "getOwnershipHistory",
-    args: [productId],
-  });
-  const claimsQuery = useReadContract({
-    address,
-    abi: productProvenanceAbi,
-    functionName: "getWarrantyClaims",
-    args: [productId],
-  });
-  const validQuery = useReadContract({
-    address,
-    abi: productProvenanceAbi,
-    functionName: "isWarrantyValid",
-    args: [productId],
-  });
-
-  if (productQuery.isLoading) {
+  if (isLoading) {
     return <p className="text-sm text-slate-500">Loading product #{productId.toString()}...</p>;
   }
 
-  if (productQuery.data === undefined) {
+  if (product === undefined) {
     return <p className="text-sm text-rose-600">Could not load product #{productId.toString()}.</p>;
   }
 
-  const product = productQuery.data;
-  const history = historyQuery.data ?? [];
-  const claims = claimsQuery.data ?? [];
-  const warrantyValid = validQuery.data === true;
+  const unlimited = product.warranty.maxClaims === 0;
 
   return (
     <div className="space-y-6">
@@ -131,31 +98,27 @@ function ProductDetails({ productId }: { productId: bigint }) {
               #{productId.toString()} &middot; serial <span className="font-mono">{product.serialNumber}</span>
             </p>
           </div>
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-medium ${
-              warrantyValid ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
-            }`}
-          >
-            {warrantyValid ? "Warranty valid" : "Warranty not valid"}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <WarrantyChip status={warrantyStatus} />
+            <StatusChip tone="bg-slate-100 text-slate-600">{label(PRODUCT_STATUS, product.status)}</StatusChip>
+          </div>
         </div>
 
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
+          <Row label="Authenticity" value="Registered on-chain by its manufacturer" />
           <Row label="Model number" value={product.model.modelNumber} />
-          <Row label="Category" value={product.model.category} />
+          <Row label="Category" value={product.model.category.length > 0 ? product.model.category : "-"} />
           <Row label="Manufacturer" value={shortAddress(product.manufacturer)} mono />
           <Row label="Current owner" value={shortAddress(product.currentOwner)} mono />
-          <Row label="Status" value={label(PRODUCT_STATUS, product.status)} />
-          <Row label="Registered at" value={formatTimestamp(product.registeredAt)} />
-          <Row label="Warranty duration" value={formatDuration(product.warrantyTerms.durationSeconds)} />
-          <Row label="Warranty expires" value={formatTimestamp(product.warranty.expirationTime)} />
+          <Row label="Registered at" value={formatTimestamp(product.createdAt)} />
+          <Row label="Warranty started" value={formatTimestamp(product.warranty.startDate)} />
+          <Row label="Warranty expires" value={formatTimestamp(product.warranty.expirationDate)} />
           <Row
             label="Claims used"
-            value={`${Number(product.warranty.claimsUsed)} / ${
-              Number(product.warrantyTerms.maxClaims) === 0 ? "unlimited" : Number(product.warrantyTerms.maxClaims)
-            }`}
+            value={`${product.warranty.claimCount} / ${unlimited ? "unlimited" : product.warranty.maxClaims}`}
           />
-          <Row label="Warranty transferable" value={product.warrantyTerms.transferable ? "yes" : "no"} />
+          <Row label="Claims left" value={remainingClaims >= 2n ** 200n ? "unlimited" : remainingClaims.toString()} />
+          <Row label="Duration" value={formatDuration(product.warranty.expirationDate - product.warranty.startDate)} />
         </dl>
 
         {product.model.metadataURI.length > 0 && (
@@ -167,6 +130,9 @@ function ProductDetails({ productId }: { productId: bigint }) {
 
       <section className="rounded-xl border border-slate-200 bg-white p-6">
         <h3 className="text-base font-semibold text-slate-900">Chain of custody</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Append-only history: every hand-over is a block, not a database row.
+        </p>
         <ol className="mt-4 space-y-3">
           {history.map((record, index) => (
             <li key={index} className="flex items-start gap-3 text-sm">
@@ -175,12 +141,15 @@ function ProductDetails({ productId }: { productId: bigint }) {
               </span>
               <div>
                 <p className="font-medium text-slate-800">
-                  {label(PARTY_ROLE, record.role)} &middot;{" "}
-                  <span className="font-mono">{shortAddress(record.owner)}</span>
+                  {shortAddress(record.from)} &rarr; <span className="font-mono">{shortAddress(record.to)}</span>
                 </p>
                 <p className="text-xs text-slate-500">
-                  {label(TRANSFER_REASON, record.reason)} &middot; {formatTimestamp(record.transferredAt)}
+                  {label(PARTY_ROLE, record.toRole)} &middot; {label(TRANSFER_REASON, record.reason)} &middot;{" "}
+                  {formatTimestamp(record.transferredAt)}
                 </p>
+                {record.evidenceHash !== ZERO_HASH && (
+                  <p className="text-xs break-all text-slate-400">evidence {record.evidenceHash}</p>
+                )}
               </div>
             </li>
           ))}
@@ -195,86 +164,139 @@ function ProductDetails({ productId }: { productId: bigint }) {
           <ul className="mt-4 space-y-3">
             {claims.map((claim) => (
               <li key={claim.claimId.toString()} className="rounded-lg border border-slate-200 p-4 text-sm">
-                <p className="font-medium text-slate-800">
-                  Claim #{claim.claimId.toString()} &middot; {label(CLAIM_STATUS, claim.status)}
-                </p>
-                <p className="text-slate-600">{claim.description}</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium text-slate-800">Claim #{claim.claimId.toString()}</p>
+                  <StatusChip
+                    tone={
+                      claim.status === 1
+                        ? "bg-emerald-50 text-emerald-700"
+                        : claim.status === 2
+                          ? "bg-rose-50 text-rose-700"
+                          : "bg-amber-50 text-amber-800"
+                    }
+                  >
+                    {label(CLAIM_STATUS, claim.status)}
+                  </StatusChip>
+                </div>
+                <p className="mt-1 text-slate-600">{claim.description}</p>
                 {claim.resolution.length > 0 && (
                   <p className="text-xs text-slate-500">Resolution: {claim.resolution}</p>
                 )}
                 <p className="mt-1 text-xs text-slate-400">
                   Filed {formatTimestamp(claim.filedAt)} by{" "}
                   <span className="font-mono">{shortAddress(claim.claimant)}</span>
+                  {claim.resolvedAt > 0n && ` · resolved ${formatTimestamp(claim.resolvedAt)}`}
                 </p>
               </li>
             ))}
           </ul>
         )}
 
-        <ClaimForm productId={productId} currentOwner={product.currentOwner} />
+        <ClaimForm productId={productId} currentOwner={product.currentOwner} remainingClaims={remainingClaims} />
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-6">
+        <h3 className="text-base font-semibold text-slate-900">Servicing log</h3>
+        {serviceLog.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">No servicing actions have been logged for this unit.</p>
+        ) : (
+          <ul className="mt-4 space-y-3">
+            {serviceLog.map((record) => (
+              <li key={record.recordId.toString()} className="rounded-lg border border-slate-200 p-4 text-sm">
+                <p className="font-medium text-slate-800">{record.action}</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  {formatTimestamp(record.loggedAt)} by{" "}
+                  <span className="font-mono">{shortAddress(record.serviceCenter)}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );
 }
 
-function Row({ label: name, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div>
-      <dt className="text-xs tracking-wide text-slate-400 uppercase">{name}</dt>
-      <dd className={mono === true ? "font-mono text-slate-800" : "text-slate-800"}>{value}</dd>
-    </div>
-  );
-}
-
-/** Lets the current owner file a warranty claim against the unit. */
-function ClaimForm({ productId, currentOwner }: { productId: bigint; currentOwner: string }) {
+/**
+ * Lets the current owner file a warranty claim.
+ *
+ * The contract asks for two conditions at once: `CUSTOMER_ROLE` and current
+ * ownership. Every submission burns a claim slot, and the warranty expires the
+ * moment the last slot is consumed - which is why the slot counter is shown.
+ */
+function ClaimForm({
+  productId,
+  currentOwner,
+  remainingClaims,
+}: {
+  productId: bigint;
+  currentOwner: `0x${string}`;
+  remainingClaims: bigint;
+}) {
+  const registry = useRegistryAddress();
   const connection = useConnection();
+  const { roles } = useRoles();
   const [description, setDescription] = useState("");
+  const { write, hash, isPending, isConfirming, isSuccess, error } = useRegistryWrite();
 
-  const { mutate: writeContract, data: hash, isPending, error } = useWriteContract();
-  const receipt = useWaitForTransactionReceipt({ hash });
-
-  const isOwner = connection.isConnected && connection.address?.toLowerCase() === currentOwner.toLowerCase();
+  const isOwner = connection.address?.toLowerCase() === currentOwner.toLowerCase();
+  const canClaim = connection.isConnected && isOwner && roles.customer;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    writeContract({
-      address: getProductProvenanceAddress(connection.chainId),
-      abi: productProvenanceAbi,
-      functionName: "fileWarrantyClaim",
-      args: [productId, description, ZERO_HASH],
+    write({
+      address: registry,
+      abi: registryAbi,
+      functionName: "submitWarrantyClaim",
+      args: [productId, description],
     });
   }
 
-  if (!isOwner) {
+  if (!canClaim) {
     return (
-      <p className="mt-4 text-xs text-slate-500">
-        Only the current owner ({shortAddress(currentOwner)}) can file a warranty claim.
+      <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-500">
+        Only the current owner ({shortAddress(currentOwner)}) holding <code className="font-mono">CUSTOMER_ROLE</code>{" "}
+        can file a claim.
+        {connection.isConnected &&
+          isOwner &&
+          !roles.customer &&
+          " This wallet owns the unit but holds no customer role."}
+      </p>
+    );
+  }
+
+  if (remainingClaims === 0n) {
+    return (
+      <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-500">
+        This warranty has no claims left - it expired when the last slot was used.
       </p>
     );
   }
 
   return (
     <form onSubmit={handleSubmit} className="mt-5 space-y-3 border-t border-slate-100 pt-5">
-      <span className="block text-sm font-medium text-slate-700">File a warranty claim</span>
-      <textarea
-        required
-        value={description}
-        onChange={(event) => setDescription(event.target.value)}
-        rows={3}
-        placeholder="Describe the fault..."
-        className={INPUT_CLASS}
-      />
-      <button
-        type="submit"
-        disabled={isPending || receipt.isLoading}
-        className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
-      >
-        {isPending ? "Waiting for wallet..." : receipt.isLoading ? "Mining..." : "Submit claim"}
+      <Field label="File a warranty claim" hint="Every submission consumes a claim slot, approved or not.">
+        <textarea
+          required
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          rows={3}
+          placeholder="Describe the fault..."
+          className={INPUT_CLASS}
+        />
+      </Field>
+      <button type="submit" disabled={isPending || isConfirming} className={BUTTON_CLASS}>
+        {isPending ? "Waiting for wallet..." : isConfirming ? "Mining..." : "Submit claim"}
       </button>
-      {error !== null && <p className="text-sm text-rose-600">{error.message}</p>}
-      {receipt.isSuccess && <p className="text-sm text-emerald-700">Claim filed in {hash}.</p>}
+      <TxFeedback
+        hash={hash}
+        isPending={isPending}
+        isConfirming={isConfirming}
+        isSuccess={isSuccess}
+        error={error}
+        successLabel="Claim filed"
+      />
     </form>
   );
 }

@@ -1,43 +1,43 @@
 "use client";
 
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { useConnection, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useConnection } from "wagmi";
 
-import { getProductProvenanceAddress, productProvenanceAbi } from "@/lib/contracts";
+import { productWarrantyRegistryAbi as registryAbi } from "@/lib/contracts";
+import { useRegistryAddress, useRegistryWrite, useRoles } from "@/lib/use-registry";
 
-/** bytes32(0) means "no off-chain evidence attached". */
-const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
+import { Field, INPUT_CLASS, BUTTON_CLASS, TxFeedback } from "./ui";
 
 const INITIAL_FORM = {
   serialNumber: "",
-  brand: "Acme",
-  modelName: "SuperWidget",
-  modelNumber: "SW-1000",
-  category: "Home appliance",
+  brand: "Aurelia",
+  modelName: "Chrono X1",
+  modelNumber: "AX1-42",
+  category: "Luxury smartwatch",
   metadataURI: "",
   durationDays: "730",
-  maxClaims: "2",
-  transferable: false,
+  maxClaims: "3",
 };
 
 type FormState = typeof INITIAL_FORM;
 
-const INPUT_CLASS =
-  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
-
 /**
- * Manufacturer form that calls `ProductProvenance.registerProduct`.
- * Only accounts authorised via `setManufacturerAuthorization` can submit it.
+ * Manufacturer screen: calls `registerProduct` on the registry.
+ *
+ * Only accounts holding `MANUFACTURER_ROLE` can submit - the contract reverts with
+ * `AccessControlUnauthorizedAccount` otherwise, and the banner below warns before
+ * the wallet prompt appears.
  */
 export function RegisterProductForm() {
   const connection = useConnection();
+  const registry = useRegistryAddress();
+  const { roles } = useRoles();
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
 
-  const { mutate: writeContract, data: hash, isPending, error: writeError } = useWriteContract();
-  const receipt = useWaitForTransactionReceipt({ hash });
+  const { write, hash, isPending, isConfirming, isSuccess, error } = useRegistryWrite();
 
   function handleText(key: keyof FormState) {
-    return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    return (event: ChangeEvent<HTMLInputElement>) => {
       const { value } = event.target;
       setForm((previous) => ({ ...previous, [key]: value }));
     };
@@ -46,12 +46,12 @@ export function RegisterProductForm() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    writeContract({
-      address: getProductProvenanceAddress(connection.chainId),
-      abi: productProvenanceAbi,
+    write({
+      address: registry,
+      abi: registryAbi,
       functionName: "registerProduct",
       args: [
-        form.serialNumber,
+        form.serialNumber.trim(),
         {
           brand: form.brand,
           modelName: form.modelName,
@@ -59,24 +59,28 @@ export function RegisterProductForm() {
           category: form.category,
           metadataURI: form.metadataURI,
         },
-        {
-          durationSeconds: BigInt(Math.round(Number(form.durationDays) * 86_400)),
-          maxClaims: Number(form.maxClaims),
-          transferable: form.transferable,
-        },
-        ZERO_HASH,
+        BigInt(Math.max(1, Math.round(Number(form.durationDays) || 0)) * 86_400),
+        Number(form.maxClaims) || 0,
       ],
     });
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5 rounded-xl border border-slate-200 bg-white p-6">
-      <Field label="Serial number" hint="Printed on the unit. Must be globally unique.">
+      {!roles.manufacturer && connection.isConnected && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          This wallet does not hold <code className="font-mono">MANUFACTURER_ROLE</code>. The registry admin grants it
+          with <code className="font-mono">grantRole</code> (or <code className="font-mono">npm run seed:local</code> on
+          a local node).
+        </p>
+      )}
+
+      <Field label="Serial number" hint="Printed on the unit. Hashed on-chain, so it can only be registered once.">
         <input
           required
           value={form.serialNumber}
           onChange={handleText("serialNumber")}
-          placeholder="SW-1000-0001"
+          placeholder="AX1-42-0001"
           className={INPUT_CLASS}
         />
       </Field>
@@ -106,7 +110,7 @@ export function RegisterProductForm() {
       </Field>
 
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Warranty duration (days)">
+        <Field label="Warranty duration (days)" hint="The warranty clock starts at registration.">
           <input
             required
             type="number"
@@ -128,43 +132,26 @@ export function RegisterProductForm() {
         </Field>
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-slate-700">
-        <input
-          type="checkbox"
-          checked={form.transferable}
-          onChange={(event) => setForm((previous) => ({ ...previous, transferable: event.target.checked }))}
-          className="size-4 rounded border-slate-300"
-        />
-        Warranty survives a customer-to-customer resale
-      </label>
-
       <button
         type="submit"
-        disabled={!connection.isConnected || isPending || receipt.isLoading}
-        className="w-full rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={!connection.isConnected || isPending || isConfirming}
+        className={`w-full ${BUTTON_CLASS}`}
       >
-        {isPending ? "Waiting for wallet..." : receipt.isLoading ? "Mining..." : "Register product"}
+        {isPending ? "Waiting for wallet..." : isConfirming ? "Mining..." : "Register product"}
       </button>
 
-      {!connection.isConnected && (
-        <p className="text-sm text-amber-700">Connect a wallet first - the unit is registered by its manufacturer.</p>
-      )}
-      {writeError !== null && <p className="text-sm text-rose-600">{writeError.message}</p>}
-      {receipt.isSuccess && (
-        <p className="text-sm text-emerald-700">
-          Registered in transaction <span className="font-mono">{hash}</span>
-        </p>
-      )}
-    </form>
-  );
-}
+      <p className="text-xs text-slate-500">
+        Registered by the manufacturer of record; the warranty terms are frozen at this point.
+      </p>
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
-      {children}
-      {hint !== undefined && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
-    </label>
+      <TxFeedback
+        hash={hash}
+        isPending={isPending}
+        isConfirming={isConfirming}
+        isSuccess={isSuccess}
+        error={error}
+        successLabel="Unit registered"
+      />
+    </form>
   );
 }

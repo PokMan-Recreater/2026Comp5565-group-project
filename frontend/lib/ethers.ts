@@ -1,12 +1,12 @@
 import { BrowserProvider, Contract, JsonRpcProvider, type Eip1193Provider, type Provider } from "ethers";
 
-import productProvenanceArtifact from "./abi/ProductProvenance.json";
-import { DEFAULT_CHAIN_ID, getProductProvenanceAddress } from "./contracts";
+import productWarrantyRegistryArtifact from "./abi/ProductWarrantyRegistry.json";
+import { DEFAULT_CHAIN_ID, getRegistryAddress } from "./contracts";
 
 const LOCAL_RPC_URL = "http://127.0.0.1:8545";
 
 /** Plain JSON ABI, which is the shape ethers.js expects. */
-export const productProvenanceAbiJson = productProvenanceArtifact.abi;
+export const registryAbiJson = productWarrantyRegistryArtifact.abi;
 
 /**
  * Read-only provider that works without a wallet. Useful for server components,
@@ -30,20 +30,20 @@ export function getBrowserProvider(): BrowserProvider | undefined {
 }
 
 /** `ethers.Contract` for the registry, read-only unless a signer is passed in. */
-export async function getProvenanceContract(options?: {
+export async function getRegistryContract(options?: {
   signer?: Awaited<ReturnType<BrowserProvider["getSigner"]>>;
   chainId?: number;
 }): Promise<Contract> {
   const chainId = options?.chainId ?? DEFAULT_CHAIN_ID;
 
   if (options?.signer !== undefined) {
-    return new Contract(getProductProvenanceAddress(chainId), productProvenanceAbiJson, options.signer);
+    return new Contract(getRegistryAddress(chainId), registryAbiJson, options.signer);
   }
 
   const browserProvider = getBrowserProvider();
   if (browserProvider !== undefined) {
-    return new Contract(getProductProvenanceAddress(chainId), productProvenanceAbiJson, browserProvider);
+    return new Contract(getRegistryAddress(chainId), registryAbiJson, browserProvider);
   }
 
-  return new Contract(getProductProvenanceAddress(chainId), productProvenanceAbiJson, getReadOnlyProvider());
+  return new Contract(getRegistryAddress(chainId), registryAbiJson, getReadOnlyProvider());
 }
