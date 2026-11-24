@@ -7,6 +7,7 @@ import {
   CLAIM_STATUS,
   PARTY_ROLE,
   PRODUCT_STATUS,
+  PRODUCT_STATUS_CODE,
   TRANSFER_REASON,
   ZERO_HASH,
   label,
@@ -85,6 +86,7 @@ function ProductDetails({ productId }: { productId: bigint }) {
   }
 
   const unlimited = product.warranty.maxClaims === 0;
+  const sold = Number(product.status) === PRODUCT_STATUS_CODE.sold;
 
   return (
     <div className="space-y-6">
@@ -111,8 +113,14 @@ function ProductDetails({ productId }: { productId: bigint }) {
           <Row label="Manufacturer" value={shortAddress(product.manufacturer)} mono />
           <Row label="Current owner" value={shortAddress(product.currentOwner)} mono />
           <Row label="Registered at" value={formatTimestamp(product.createdAt)} />
-          <Row label="Warranty started" value={formatTimestamp(product.warranty.startDate)} />
-          <Row label="Warranty expires" value={formatTimestamp(product.warranty.expirationDate)} />
+          <Row
+            label="Warranty starts (purchase date)"
+            value={sold ? formatTimestamp(product.warranty.startDate) : "Starts at the retail sale"}
+          />
+          <Row
+            label={sold ? "Warranty expires" : "Warranty expiry"}
+            value={sold ? formatTimestamp(product.warranty.expirationDate) : "Not started - set at the retail sale"}
+          />
           <Row
             label="Claims used"
             value={`${product.warranty.claimCount} / ${unlimited ? "unlimited" : product.warranty.maxClaims}`}

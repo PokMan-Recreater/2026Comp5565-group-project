@@ -161,12 +161,13 @@ describe("ProductWarrantyRegistry", function () {
       expect(await registry.totalProducts()).to.equal(1n);
     });
 
-    it("starts the warranty clock at registration and freezes the terms", async function () {
+    it("freezes the terms at registration and records a provisional warranty window", async function () {
       const { registry, manufacturer } = await networkHelpers.loadFixture(deployFixture);
 
       const productId = await registerUnit(registry, manufacturer, "SW-1000-0002", { maxClaims: 3 });
       const warranty = await registry.getWarranty(productId);
 
+      // Provisional until the unit is sold: `transferToCustomer` re-bases the window.
       expect(warranty.startDate).to.equal((await registry.getProduct(productId)).createdAt);
       expect(warranty.expirationDate).to.equal(warranty.startDate + TWO_YEARS);
       expect(warranty.maxClaims).to.equal(3n);
@@ -430,6 +431,116 @@ describe("ProductWarrantyRegistry", function () {
       await expect(registry.connect(retailer).transferOwnership(productId, customer.address, ZERO_HASH))
         .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
         .withArgs(retailer.address, await registry.CUSTOMER_ROLE());
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Purchase-date warranty start
+  // -------------------------------------------------------------------------
+
+  describe("Purchase-date warranty start", function () {
+    it("starts the customer warranty at the retail sale, not at registration", async function () {
+      const { registry, manufacturer, retailer, customer } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-2500-0001");
+      const registeredAt = (await registry.getProduct(productId)).createdAt;
+
+      // A unit can sit in the warehouse for months before anyone buys it.
+      await networkHelpers.time.increase(100n * DAY);
+      await registry.connect(manufacturer).transferToRetailer(productId, retailer.address, ZERO_HASH);
+
+      await networkHelpers.time.increase(30n * DAY);
+      await registry.connect(retailer).transferToCustomer(productId, customer.address, ZERO_HASH);
+      const purchaseDate = BigInt(await networkHelpers.time.latest());
+
+      const warranty = await registry.getWarranty(productId);
+      expect(warranty.startDate).to.equal(purchaseDate);
+      expect(warranty.startDate).to.not.equal(registeredAt);
+      expect(warranty.expirationDate).to.equal(purchaseDate + TWO_YEARS);
+      expect(warranty.status).to.equal(WarrantyStatus.Active);
+      expect(await registry.getWarrantyStatus(productId)).to.equal(WarrantyStatus.Active);
+
+      // The sale itself does not consume a claim.
+      expect(await registry.remainingClaims(productId)).to.equal(2n);
+    });
+
+    it("emits WarrantyStarted with the purchase date", async function () {
+      const { registry, manufacturer, retailer, customer } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-2500-0002");
+      await registry.connect(manufacturer).transferToRetailer(productId, retailer.address, ZERO_HASH);
+
+      const tx = await registry.connect(retailer).transferToCustomer(productId, customer.address, ZERO_HASH);
+      const warranty = await registry.getWarranty(productId);
+
+      await expect(tx)
+        .to.emit(registry, "WarrantyStarted")
+        .withArgs(productId, warranty.startDate, warranty.expirationDate);
+    });
+
+    it("gives the buyer the full duration even if the unit sat in stock past the provisional expiry", async function () {
+      const { registry, manufacturer, retailer, customer } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-2500-0003");
+      await networkHelpers.time.increase(TWO_YEARS + 30n * DAY);
+
+      // Anyone may persist the provisional expiry while the unit is still unsold.
+      await registry.syncWarrantyStatus(productId);
+      expect((await registry.getWarranty(productId)).status).to.equal(WarrantyStatus.Expired);
+
+      await registry.connect(manufacturer).transferToRetailer(productId, retailer.address, ZERO_HASH);
+      await registry.connect(retailer).transferToCustomer(productId, customer.address, ZERO_HASH);
+
+      const warranty = await registry.getWarranty(productId);
+      expect(warranty.status).to.equal(WarrantyStatus.Active);
+      expect(warranty.startDate).to.equal(BigInt(await networkHelpers.time.latest()));
+      expect(warranty.expirationDate).to.equal(warranty.startDate + TWO_YEARS);
+      expect(await registry.isWarrantyActive(productId)).to.equal(true);
+
+      // The buyer really can file a claim, so the warranty is alive again.
+      await registry.connect(customer).submitWarrantyClaim(productId, "dead pixel");
+      expect(await registry.getWarrantyClaims(productId)).to.have.lengthOf(1);
+    });
+
+    it("never resurrects a warranty the manufacturer voided", async function () {
+      const { registry, manufacturer, retailer, customer } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-2500-0004");
+      const before = await registry.getWarranty(productId);
+
+      await registry.connect(manufacturer).voidWarranty(productId, "missing serial");
+      await registry.connect(manufacturer).transferToRetailer(productId, retailer.address, ZERO_HASH);
+
+      await expect(registry.connect(retailer).transferToCustomer(productId, customer.address, ZERO_HASH)).to.not.emit(
+        registry,
+        "WarrantyStarted",
+      );
+
+      const after = await registry.getWarranty(productId);
+      expect(after.startDate).to.equal(before.startDate);
+      expect(after.expirationDate).to.equal(before.expirationDate);
+      expect(after.status).to.equal(WarrantyStatus.Void);
+
+      await expect(registry.connect(customer).submitWarrantyClaim(productId, "still broken"))
+        .to.be.revertedWithCustomError(registry, "WarrantyNotActive")
+        .withArgs(productId, WarrantyStatus.Void);
+    });
+
+    it("keeps the remaining warranty across a customer-to-customer resale", async function () {
+      const { registry, manufacturer, retailer, customer, reseller } = await networkHelpers.loadFixture(deployFixture);
+
+      const productId = await registerUnit(registry, manufacturer, "SW-2500-0005");
+      await sellToCustomer(registry, productId, { manufacturer, retailer, customer });
+      const purchased = await registry.getWarranty(productId);
+
+      await networkHelpers.time.increase(100n * DAY);
+      await registry.connect(customer).transferOwnership(productId, reseller.address, ZERO_HASH);
+
+      const after = await registry.getWarranty(productId);
+      expect(after.startDate).to.equal(purchased.startDate);
+      expect(after.expirationDate).to.equal(purchased.expirationDate);
+      expect(after.status).to.equal(WarrantyStatus.Active);
+      expect(await registry.getWarrantyStatus(productId)).to.equal(WarrantyStatus.Active);
     });
   });
 

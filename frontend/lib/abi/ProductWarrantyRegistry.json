@@ -595,6 +595,31 @@
         },
         {
           "indexed": false,
+          "internalType": "uint64",
+          "name": "startDate",
+          "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "expirationDate",
+          "type": "uint64"
+        }
+      ],
+      "name": "WarrantyStarted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "productId",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
           "internalType": "string",
           "name": "reason",
           "type": "string"

@@ -110,7 +110,10 @@ export function RegisterProductForm() {
       </Field>
 
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Warranty duration (days)" hint="The warranty clock starts at registration.">
+        <Field
+          label="Warranty duration (days)"
+          hint="Fixed now; the clock starts when a retailer sells the unit (the customer's purchase date)."
+        >
           <input
             required
             type="number"

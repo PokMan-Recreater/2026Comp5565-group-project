@@ -122,8 +122,9 @@ export default function HomePage() {
           invoice or delivery note.
         </Card>
         <Card title="Warranty">
-          Duration and claim limit are frozen at registration. Expiry is derived from the block timestamp and the claim
-          counter, so a warranty can never look active just because nobody poked the contract.
+          Duration and claim limit are frozen at registration, but the warranty clock starts at the retail sale (the
+          purchase date). Expiry is derived from the block timestamp and the claim counter, so a warranty can never look
+          active just because nobody poked the contract.
         </Card>
       </section>
 

@@ -7,7 +7,8 @@ Every unit is registered by its manufacturer. Each hand-over — manufacturer to
 retailer to customer, customer to customer on resale, or back to a service centre — is
 appended to an immutable **chain of custody**. The **warranty terms** (duration, claim
 limit, transferability) are frozen at registration time, while the live warranty state
-(claims used, expiry, voided flag) is tracked on-chain.
+(claims used, expiry, voided flag) is tracked on-chain. The warranty clock itself starts
+at the retail sale — the customer's purchase date — not at registration.
 
 ```
 Manufacturer --> Retailer --> Customer --> (Resale) --> Customer #2
@@ -64,7 +65,7 @@ Manufacturer --> Retailer --> Customer --> (Resale) --> Customer #2
 |   |   |-- ProductWarrantyRegistry.sol   THE deployed contract (role based)
 |   |   `-- ProductProvenance.sol         earlier Ownable iteration (kept for the report)
 |   |-- test/
-|   |   |-- ProductWarrantyRegistry.ts    42 Mocha tests
+|   |   |-- ProductWarrantyRegistry.ts    47 Mocha tests
 |   |   `-- ProductProvenance.ts          28 Mocha tests
 |   |-- scripts/
 |   |   |-- deploy.ts                deploy the registry + record the address
@@ -144,7 +145,7 @@ npm install
 #    Also generates TypeChain bindings in contracts/types/.
 npm run compile
 
-# 2. Run the contract test suite (70 tests on an in-process simulated network).
+# 2. Run the contract test suite (75 tests on an in-process simulated network).
 npm test
 
 # 3. Type-check the Hardhat workspace. It compiles first, because the generated
@@ -229,7 +230,7 @@ explicitly: `npm run seed:local` does it for the local demo accounts, and
 | Type              | Purpose                                                                                |
 | ----------------- | -------------------------------------------------------------------------------------- |
 | `ProductModel`    | Static description: `brand`, `modelName`, `modelNumber`, `category`, `metadataURI`.     |
-| `Warranty`        | One packed slot: `startDate`, `expirationDate`, `maxClaims`, `claimCount`, `status`.    |
+| `Warranty`        | One packed slot: `startDate` (the purchase date once sold), `expirationDate`, `maxClaims`, `claimCount`, `status`. |
 | `OwnershipRecord` | One hop: `from`, `to`, `toRole`, `reason`, `transferredAt`, `evidenceHash`.             |
 | `WarrantyClaim`   | `claimId`, `claimant`, `filedAt`, `resolvedAt`, `status`, `description`, `resolution`.  |
 | `ServiceRecord`   | `recordId`, `serviceCenter`, `loggedAt`, `action`, `evidenceHash`.                      |
@@ -259,9 +260,9 @@ never pays for its whole history.
 
 | Function                                                                          | Who can call it        | What it does                                           |
 | --------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------ |
-| `registerProduct(serialNumber, model, duration, maxClaims)`                       | manufacturer           | creates the record, starts the warranty clock, hop #0    |
+| `registerProduct(serialNumber, model, duration, maxClaims)`                       | manufacturer           | creates the record, freezes the terms, hop #0             |
 | `transferToRetailer(productId, retailer, evidenceHash)`                           | owner + manufacturer   | ships the unit; receiver needs `RETAILER_ROLE`           |
-| `transferToCustomer(productId, customer, evidenceHash)`                           | owner + retailer       | retail sale; receiver needs `CUSTOMER_ROLE`              |
+| `transferToCustomer(productId, customer, evidenceHash)`                           | owner + retailer       | retail sale; starts the warranty clock at the purchase date; needs `CUSTOMER_ROLE` |
 | `transferOwnership(productId, newOwner, evidenceHash)`                            | owner + customer       | resale; the remaining warranty travels with the unit     |
 | `submitWarrantyClaim(productId, description)`                                     | owner + customer       | consumes a claim slot, opens a `Pending` claim           |
 | `resolveWarrantyClaim(productId, claimId, approved, resolution)`                  | service centre         | approves or rejects a claim                              |
@@ -281,6 +282,12 @@ never pays for its whole history.
   emits `WarrantyExpired(productId, DurationElapsed | ClaimLimitReached, expirationDate)`.
 - Claim slots are consumed on **submission**, not on approval, so a rejection does not
   give the warranty a second life; `maxClaims == 0` means unlimited.
+- The warranty clock starts at the **retail sale** (`transferToCustomer`), i.e. the
+  customer's purchase date. The window written at registration is only provisional, so a
+  unit can sit in stock without eating into the buyer's term; the sale re-bases
+  `startDate` / `expirationDate` and emits `WarrantyStarted`. A resale does not restart
+  the clock — whatever is left travels with the unit — and a `Void` or claim-exhausted
+  warranty is never revived by a sale.
 - A recalled unit can no longer change hands (`ProductIsRecalled`), and a recall voids
   the warranty.
 - Voiding and recalling require the manufacturer **of record**, not merely the role.
@@ -292,7 +299,7 @@ never pays for its whole history.
 
 ### Events
 
-`ProductRegistered`, `WarrantyCreated`, `ProductOwnershipTransferred`,
+`ProductRegistered`, `WarrantyCreated`, `WarrantyStarted`, `ProductOwnershipTransferred`,
 `WarrantyClaimSubmitted`, `WarrantyClaimResolved`, `ServiceActionLogged`,
 `WarrantyExpired`, `WarrantyVoided`, `ProductRecalled`, plus OpenZeppelin's
 `RoleGranted` / `RoleRevoked`.
@@ -399,7 +406,7 @@ Both are wired up on purpose:
 
 | Script              | Does                                                |
 | ------------------- | --------------------------------------------------- |
-| `npm run test`      | 70 Mocha tests on the in-process simulated network  |
+| `npm run test`      | 75 Mocha tests on the in-process simulated network  |
 | `npm run deploy:*`  | deploy the registry (`--network localhost\|sepolia`) |
 | `npm run seed:local`| grant demo roles + walk a full lifecycle            |
 | `npm run export:abi`| regenerate the frontend ABI + address map           |
@@ -494,13 +501,13 @@ npx hardhat verify --network sepolia <DEPLOYED_ADDRESS> <INITIAL_ADMIN_ADDRESS>
 ## Testing
 
 ```powershell
-npm test                 # 70 tests, in-process network, no node required
+npm test                 # 75 tests, in-process network, no node required
 npm run coverage         # coverage report in contracts/coverage/
 npm run typecheck        # Solidity compile + TypeScript check
 cd frontend; npm run lint  # ESLint over the Next.js workspace
 ```
 
-`ProductWarrantyRegistry.ts` (42 tests) covers registration, the full
+`ProductWarrantyRegistry.ts` (47 tests) covers registration, the full
 `Manufacturer -> Retailer -> Customer -> Resale` chain, the role matrix (including
 `RecipientNotAuthorized` and `AccessControlUnauthorizedAccount`), claim limits,
 automatic expiry (via `networkHelpers.time.increase`), `syncWarrantyStatus`, voiding,

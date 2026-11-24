@@ -36,6 +36,10 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  *   because nobody poked the contract. The stored `Warranty.status` is synced lazily by
  *   `_syncWarrantyStatus` on every state changing interaction (and can be poked by anyone
  *   through `syncWarrantyStatus`), which is when `WarrantyExpired` is emitted.
+ * - The warranty *duration* is frozen at registration, but the clock belongs to the customer:
+ *   `registerProduct` only opens a provisional window (`startDate = registration time`) and the
+ *   retail sale (`transferToCustomer`, i.e. the purchase date) re-bases it, so the end consumer
+ *   always receives the full term no matter how long the unit sat in stock.
  * - Custom errors are used instead of revert strings (cheaper, and typed for the frontend).
  * - Structs are packed so that `Warranty` occupies a single 32 byte storage slot.
  */
@@ -119,8 +123,9 @@ contract ProductWarrantyRegistry is AccessControl {
   /**
    * @notice Warranty of one unit: the terms frozen at registration plus the live counters.
    * @dev Packed into a single 32 byte storage slot (8 + 8 + 4 + 4 + 1 = 25 bytes).
-   * @param startDate      Timestamp the warranty clock started (registration time).
-   * @param expirationDate Timestamp at which the warranty stops being active.
+   * @param startDate      Start of the warranty window: registration time until the retail sale,
+   *                       the customer's purchase date afterwards.
+   * @param expirationDate Timestamp at which the warranty stops being active (startDate + duration).
    * @param maxClaims      Maximum number of claims allowed; `0` means unlimited.
    * @param claimCount     Claims filed so far (every submission counts, see `submitWarrantyClaim`).
    * @param status         Stored status; expiry is derived, `Void` is only ever set explicitly.
@@ -226,6 +231,7 @@ contract ProductWarrantyRegistry is AccessControl {
     uint64 createdAt
   );
   event WarrantyCreated(uint256 indexed productId, uint64 startDate, uint64 expirationDate, uint32 maxClaims);
+  event WarrantyStarted(uint256 indexed productId, uint64 startDate, uint64 expirationDate);
   event ProductOwnershipTransferred(
     uint256 indexed productId,
     address indexed from,
@@ -340,10 +346,12 @@ contract ProductWarrantyRegistry is AccessControl {
   /**
    * @notice Register a newly manufactured unit on-chain.
    * @dev Only accounts holding `MANUFACTURER_ROLE` can register. The caller becomes both the
-   *      manufacturer of record and the first owner, and the warranty clock starts now.
+   *      manufacturer of record and the first owner. The warranty window written here is only
+   *      provisional: `transferToCustomer` re-bases it to the customer's purchase date, so the
+   *      end consumer always receives the full `warrantyDurationSeconds`.
    * @param serialNumber            Serial printed on the unit; must be globally unique.
    * @param model                   Static model description (brand, model, metadata URI, ...).
-   * @param warrantyDurationSeconds Warranty length counted from now, in seconds (must be > 0).
+   * @param warrantyDurationSeconds Warranty length in seconds, counted from the retail sale (must be > 0).
    * @param maxClaims               Maximum number of claims allowed; `0` means unlimited.
    * @return productId              Sequential id of the new unit (ids start at 1).
    */
@@ -368,6 +376,7 @@ contract ProductWarrantyRegistry is AccessControl {
 
     _serialToProductId[serialHash] = productId;
 
+    // Provisional window: re-based to the purchase date by `transferToCustomer`.
     uint64 startDate = uint64(block.timestamp);
     uint64 expirationDate = startDate + warrantyDurationSeconds;
 
@@ -435,7 +444,8 @@ contract ProductWarrantyRegistry is AccessControl {
   /**
    * @notice Complete a retail sale: hand the unit from the retailer to the end customer.
    * @dev Callable by the retailer that currently owns the unit; the buyer must hold
-   *      `CUSTOMER_ROLE`. The warranty clock keeps running across the sale.
+   *      `CUSTOMER_ROLE`. This sale *is* the customer's purchase date, so the warranty clock
+   *      starts here and the buyer receives the full duration agreed at registration.
    * @param productId    Unit being sold.
    * @param customer     Buying customer address.
    * @param evidenceHash keccak256 of the receipt (or bytes32(0)).
@@ -446,7 +456,7 @@ contract ProductWarrantyRegistry is AccessControl {
     bytes32 evidenceHash
   ) external productExists(productId) onlyProductOwner(productId) onlyRetailer {
     Product storage product = _products[productId];
-    _syncWarrantyStatus(productId);
+    _startWarrantyAtPurchase(productId);
 
     _transfer(
       productId,
@@ -813,6 +823,34 @@ contract ProductWarrantyRegistry is AccessControl {
 
     warranty.status = WarrantyStatus.Void;
     emit WarrantyVoided(productId, reason);
+  }
+
+  /**
+   * @dev Starts the customer warranty clock at the retail sale (the purchase date).
+   *
+   *      The terms are frozen at registration, so the full duration is still recoverable as
+   *      `expirationDate - startDate` (nothing mutates those two fields before the first sale).
+   *      A warranty that is already `Void`, or whose claim limit is used up, is left untouched:
+   *      a sale must never revive a dead warranty.
+   *
+   *      Re-basing also clears a provisional `Expired` that `syncWarrantyStatus` may have
+   *      persisted while the unit was still in stock, so a unit that sat on the shelf longer
+   *      than its duration still reaches the customer with the complete term.
+   */
+  function _startWarrantyAtPurchase(uint256 productId) private {
+    Warranty storage warranty = _products[productId].warranty;
+
+    if (warranty.status == WarrantyStatus.Void) return;
+    if (warranty.maxClaims != 0 && warranty.claimCount >= warranty.maxClaims) return;
+
+    uint64 purchaseDate = uint64(block.timestamp);
+    uint64 duration = warranty.expirationDate - warranty.startDate;
+
+    warranty.startDate = purchaseDate;
+    warranty.expirationDate = purchaseDate + duration;
+    warranty.status = WarrantyStatus.Active;
+
+    emit WarrantyStarted(productId, purchaseDate, warranty.expirationDate);
   }
 
   /**

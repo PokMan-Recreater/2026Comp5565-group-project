@@ -21,7 +21,7 @@ const TRANSFER_COPY: Record<TransferKind, { title: string; verb: string; hint: s
   retailSale: {
     title: "Complete a retail sale",
     verb: "transferToCustomer",
-    hint: "Retailer -> customer. The buyer must hold CUSTOMER_ROLE; the warranty clock keeps running.",
+    hint: "Retailer -> customer. The buyer must hold CUSTOMER_ROLE; the warranty clock starts now (the purchase date).",
     role: "CUSTOMER_ROLE",
   },
   resale: {

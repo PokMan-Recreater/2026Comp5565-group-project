@@ -94,6 +94,14 @@ export const PRODUCT_STATUS: Record<string, string> = {
   "4": "Recalled",
 };
 
+export const PRODUCT_STATUS_CODE = {
+  none: 0,
+  registered: 1,
+  inTransit: 2,
+  sold: 3,
+  recalled: 4,
+} as const;
+
 export const TRANSFER_REASON: Record<string, string> = {
   "0": "Manufactured",
   "1": "Distribution",
@@ -149,6 +157,7 @@ export type ProductModelRecord = {
 };
 
 export type WarrantyRecord = {
+  /** Warranty window start: the registration date until the unit is sold, the purchase date afterwards. */
   startDate: bigint;
   expirationDate: bigint;
   maxClaims: number;
